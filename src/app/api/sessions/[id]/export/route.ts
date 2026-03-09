@@ -41,7 +41,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       lines.push(
         `### ${i + 1}. ${c.author}`,
         `**Location:** ${describePosition(c.x_percent, c.y_percent)} (x: ${c.x_percent.toFixed(1)}%, y: ${c.y_percent.toFixed(1)}% from top of page)`,
-        `**Page:** ${c.page_path}`,
+        `**Page:** ${(() => { try { return new URL(c.page_path, session.url).href } catch { return c.page_path } })()}`,
         `**Date:** ${new Date(c.created_at).toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}`,
         '',
         c.text,

@@ -6,21 +6,21 @@ import type { Comment } from '@/lib/types'
 interface Props {
   comment: Comment
   index: number
-  screenXPct: number
-  screenYPct: number
+  xPct: number   // % of page width
+  yPx: number    // absolute px from page top (inside scroll container)
   isActive: boolean
   onClick: () => void
   onResolve: (id: string, resolved: boolean) => void
   onDelete: (id: string) => void
 }
 
-export default function CommentPin({ comment, index, screenXPct, screenYPct, isActive, onClick, onResolve, onDelete }: Props) {
+export default function CommentPin({ comment, index, xPct, yPx, isActive, onClick, onResolve, onDelete }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   return (
     <div
-      className="absolute z-20"
-      style={{ left: `${screenXPct}%`, top: `${screenYPct}%`, pointerEvents: 'auto' }}
+      className="absolute"
+      style={{ left: `${xPct}%`, top: `${yPx}px`, pointerEvents: 'auto', zIndex: isActive ? 30 : 20 }}
     >
       <button
         onClick={e => { e.stopPropagation(); onClick() }}
@@ -38,7 +38,7 @@ export default function CommentPin({ comment, index, screenXPct, screenYPct, isA
 
       {isActive && (
         <div
-          className="absolute left-8 top-0 w-64 rounded-lg p-3 z-30"
+          className="absolute left-8 top-0 w-64 rounded-lg p-3"
           style={{
             backgroundColor: 'var(--bg)',
             border: '1px solid var(--border)',
@@ -56,7 +56,7 @@ export default function CommentPin({ comment, index, screenXPct, screenYPct, isA
           <div className="flex items-center gap-2">
             <button
               onClick={() => onResolve(comment.id, !comment.resolved)}
-              className="text-xs px-2 py-1 rounded-md transition-colors cursor-pointer"
+              className="text-xs px-2 py-1 rounded-md cursor-pointer"
               style={{
                 border: '1px solid var(--border)',
                 color: comment.resolved ? 'var(--accent)' : 'var(--text-muted)',
@@ -74,20 +74,12 @@ export default function CommentPin({ comment, index, screenXPct, screenYPct, isA
                 >
                   Delete
                 </button>
-                <button
-                  onClick={() => setConfirmDelete(false)}
-                  className="text-xs cursor-pointer"
-                  style={{ color: 'var(--text-muted)' }}
-                >
+                <button onClick={() => setConfirmDelete(false)} className="text-xs cursor-pointer" style={{ color: 'var(--text-muted)' }}>
                   Cancel
                 </button>
               </>
             ) : (
-              <button
-                onClick={() => setConfirmDelete(true)}
-                className="text-xs cursor-pointer"
-                style={{ color: 'var(--text-muted)' }}
-              >
+              <button onClick={() => setConfirmDelete(true)} className="text-xs cursor-pointer" style={{ color: 'var(--text-muted)' }}>
                 Delete
               </button>
             )}
