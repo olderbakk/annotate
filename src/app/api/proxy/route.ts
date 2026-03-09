@@ -32,13 +32,9 @@ export async function GET(req: NextRequest) {
   const parsedUrl = new URL(url)
   const origin = parsedUrl.origin
 
-  // Use <base> so relative assets (CSS, images, JS) resolve against original origin
+  // <base> makes relative assets (CSS, images, fonts) resolve against the original origin
   const baseTag = `<base href="${origin}/">`
 
-  // Injected script:
-  // - Tracks scroll and page height, reports to parent via postMessage
-  // - Sends the REAL URL (not the proxy URL)
-  // - Intercepts link clicks to route through proxy so navigation stays proxied
   const script = `<script>
 (function () {
   var REAL_URL = ${JSON.stringify(url)};
@@ -55,7 +51,36 @@ export async function GET(req: NextRequest) {
     } catch (e) {}
   }
 
-  // Intercept link clicks so navigation stays in proxy
+  // ── SPA navigation: intercept history.pushState / replaceState ──────────────
+  // Modern sites (Next.js, Nuxt, SvelteKit, etc.) use the History API for
+  // client-side routing. We patch these so we always know the real current URL
+  // without needing to reload through the proxy.
+  function onSpaNavigate(newUrl) {
+    try {
+      REAL_URL = new URL(newUrl, REAL_URL).href;
+      send({ event: 'navigate' });
+    } catch (e) {}
+  }
+
+  var _pushState = history.pushState.bind(history);
+  var _replaceState = history.replaceState.bind(history);
+
+  history.pushState = function (state, title, url) {
+    _pushState(state, title, url);
+    if (url) onSpaNavigate(String(url));
+  };
+  history.replaceState = function (state, title, url) {
+    _replaceState(state, title, url);
+    if (url) onSpaNavigate(String(url));
+  };
+
+  window.addEventListener('popstate', function () {
+    onSpaNavigate(location.href);
+  });
+
+  // ── MPA navigation: intercept <a> clicks for traditional page loads ─────────
+  // For sites that do full page reloads on link clicks, we redirect through
+  // the proxy so our script stays alive on the next page.
   document.addEventListener('click', function (e) {
     var el = e.target;
     while (el && el.tagName !== 'A') el = el.parentElement;
@@ -65,7 +90,6 @@ export async function GET(req: NextRequest) {
         href.startsWith('mailto:') || href.startsWith('tel:')) return;
     try {
       var abs = new URL(href, REAL_URL).href;
-      // Only intercept same-origin links
       if (new URL(abs).origin === new URL(REAL_URL).origin) {
         e.preventDefault();
         window.location.href = PROXY_BASE + encodeURIComponent(abs);
@@ -73,16 +97,18 @@ export async function GET(req: NextRequest) {
     } catch (err) {}
   }, true);
 
-  // Listen for scroll commands from parent
+  // ── Scroll commands from parent ─────────────────────────────────────────────
   window.addEventListener('message', function (e) {
     if (e.data && e.data.__annotateCommand === 'scrollTo') {
       window.scrollTo({ top: e.data.y, behavior: 'smooth' });
     }
   });
 
+  // ── Reporting ───────────────────────────────────────────────────────────────
   window.addEventListener('scroll', function () { send({ event: 'scroll' }); }, { passive: true });
   window.addEventListener('resize', function () { send({ event: 'resize' }); });
   setInterval(function () { send({ event: 'tick' }); }, 300);
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () { send({ event: 'load' }); });
   } else {

@@ -66,8 +66,8 @@ export default function ReviewClient({ session }: { session: Session }) {
 
       if (d.realUrl) setCurrentUrl(d.realUrl)
 
-      // If there's a pending jump and this message is the load event for the target page
-      if (pendingJumpRef.current && d.event === 'load') {
+      // If there's a pending jump and the new page has loaded (load or navigate event)
+      if (pendingJumpRef.current && (d.event === 'load' || d.event === 'navigate')) {
         const jump = pendingJumpRef.current
         if (lastJumpedUrlRef.current !== jump.pageUrl) {
           lastJumpedUrlRef.current = jump.pageUrl
