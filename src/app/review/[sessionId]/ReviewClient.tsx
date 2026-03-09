@@ -7,8 +7,14 @@ import CommentSidebar from '@/components/CommentSidebar'
 import CommentInput from '@/components/CommentInput'
 
 interface PendingPin {
-  xPct: number
-  yPct: number
+  xPct: number   // % of overlay width
+  yAbsPct: number // % of total page height (absolute)
+  screenYPct: number // % of overlay height (for rendering the input)
+}
+
+interface IframeState {
+  scrollY: number
+  pageHeight: number
 }
 
 type Mode = 'browse' | 'comment'
@@ -22,6 +28,7 @@ export default function ReviewClient({ session }: { session: Session }) {
   const [copied, setCopied] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [mode, setMode] = useState<Mode>('browse')
+  const [iframe, setIframe] = useState<IframeState>({ scrollY: 0, pageHeight: 0 })
   const overlayRef = useRef<HTMLDivElement>(null)
 
   const fetchComments = useCallback(async () => {
@@ -34,21 +41,40 @@ export default function ReviewClient({ session }: { session: Session }) {
     fetchComments()
   }, [fetchComments])
 
-  // Cancel pending pin when switching to browse mode
+  // Listen for scroll/height updates from the proxied iframe
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      if (!e.data?.__annotate) return
+      setIframe({ scrollY: e.data.scrollY ?? 0, pageHeight: e.data.pageHeight ?? 0 })
+      if (e.data.href) {
+        try {
+          const path = new URL(e.data.href).pathname
+          setCurrentPath(path)
+        } catch {}
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
   useEffect(() => {
     if (mode === 'browse') setPendingPin(null)
   }, [mode])
 
   function handleOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
     if (mode !== 'comment') return
-    if (pendingPin) {
-      setPendingPin(null)
-      return
-    }
+    if (pendingPin) { setPendingPin(null); return }
+
     const rect = overlayRef.current!.getBoundingClientRect()
     const xPct = ((e.clientX - rect.left) / rect.width) * 100
-    const yPct = ((e.clientY - rect.top) / rect.height) * 100
-    setPendingPin({ xPct, yPct })
+    const screenYPct = ((e.clientY - rect.top) / rect.height) * 100
+
+    // Convert viewport Y → absolute page Y (as % of total page height)
+    const clickPx = (e.clientY - rect.top) + iframe.scrollY
+    const pageH = iframe.pageHeight || rect.height
+    const yAbsPct = (clickPx / pageH) * 100
+
+    setPendingPin({ xPct, yAbsPct, screenYPct })
     setActiveCommentId(null)
   }
 
@@ -61,7 +87,7 @@ export default function ReviewClient({ session }: { session: Session }) {
         session_id: session.id,
         page_path: currentPath,
         x_percent: pendingPin.xPct,
-        y_percent: pendingPin.yPct,
+        y_percent: pendingPin.yAbsPct,
         text,
         author,
       }),
@@ -93,8 +119,19 @@ export default function ReviewClient({ session }: { session: Session }) {
     setTimeout(() => setCopied(false), 2000)
   }
 
+  // Convert a comment's absolute y% back to viewport y%
+  function toScreenYPct(yAbsPct: number): number | null {
+    if (!overlayRef.current) return null
+    const pageH = iframe.pageHeight || overlayRef.current.clientHeight
+    const absPx = (yAbsPct / 100) * pageH
+    const screenPx = absPx - iframe.scrollY
+    const screenPct = (screenPx / overlayRef.current.clientHeight) * 100
+    return screenPct
+  }
+
   const pageComments = comments.filter(c => c.page_path === currentPath)
   const unresolvedCount = comments.filter(c => !c.resolved).length
+  const proxyUrl = `/api/proxy?url=${encodeURIComponent(session.url)}`
 
   return (
     <div className="flex flex-col h-screen overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
@@ -153,6 +190,14 @@ export default function ReviewClient({ session }: { session: Session }) {
               {unresolvedCount} open
             </span>
           )}
+          <a
+            href={`/api/sessions/${session.id}/export`}
+            download
+            className="text-xs px-2.5 py-1 rounded-md transition-colors cursor-pointer"
+            style={{ border: '1px solid var(--border)', color: 'var(--text-muted)' }}
+          >
+            Export
+          </a>
           <button
             onClick={copyShareLink}
             className="text-xs px-2.5 py-1 rounded-md transition-colors cursor-pointer"
@@ -177,17 +222,15 @@ export default function ReviewClient({ session }: { session: Session }) {
       <div className="flex flex-1 overflow-hidden">
         {/* Iframe area */}
         <div className="flex-1 relative overflow-hidden">
-          {/* Iframe — always full size, scrollable in browse mode */}
           <iframe
-            src={session.url}
+            src={proxyUrl}
             className="w-full h-full border-0"
             onLoad={() => setIframeLoaded(true)}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-navigation"
             title="Review target"
             style={{ pointerEvents: mode === 'browse' ? 'auto' : 'none' }}
           />
 
-          {/* Overlay — only active in comment mode */}
+          {/* Overlay — captures clicks in comment mode, shows pins always */}
           {iframeLoaded && (
             <div
               ref={overlayRef}
@@ -198,24 +241,32 @@ export default function ReviewClient({ session }: { session: Session }) {
               }}
               onClick={handleOverlayClick}
             >
-              {/* Placed pins — always visible */}
-              {pageComments.map((comment, i) => (
-                <CommentPin
-                  key={comment.id}
-                  comment={comment}
-                  index={i + 1}
-                  isActive={activeCommentId === comment.id}
-                  onClick={() => setActiveCommentId(activeCommentId === comment.id ? null : comment.id)}
-                  onResolve={handleResolve}
-                  onDelete={handleDelete}
-                />
-              ))}
+              {/* Placed pins — repositioned based on current scroll */}
+              {pageComments.map((comment, i) => {
+                const screenY = toScreenYPct(comment.y_percent)
+                if (screenY === null) return null
+                // Hide pins that are scrolled out of view (with a small buffer)
+                if (screenY < -5 || screenY > 105) return null
+                return (
+                  <CommentPin
+                    key={comment.id}
+                    comment={comment}
+                    index={i + 1}
+                    screenXPct={comment.x_percent}
+                    screenYPct={screenY}
+                    isActive={activeCommentId === comment.id}
+                    onClick={() => setActiveCommentId(activeCommentId === comment.id ? null : comment.id)}
+                    onResolve={handleResolve}
+                    onDelete={handleDelete}
+                  />
+                )
+              })}
 
               {/* Pending pin */}
               {pendingPin && (
                 <div
                   className="absolute z-30"
-                  style={{ left: `${pendingPin.xPct}%`, top: `${pendingPin.yPct}%` }}
+                  style={{ left: `${pendingPin.xPct}%`, top: `${pendingPin.screenYPct}%` }}
                 >
                   <div
                     className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium -translate-x-1/2 -translate-y-1/2"
@@ -232,15 +283,10 @@ export default function ReviewClient({ session }: { session: Session }) {
             </div>
           )}
 
-          {/* Comment mode hint bar */}
           {mode === 'comment' && (
             <div
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full text-xs z-20"
-              style={{
-                backgroundColor: 'var(--text)',
-                color: 'var(--bg)',
-                boxShadow: '0 2px 12px rgba(0,0,0,0.15)',
-              }}
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full text-xs z-20 pointer-events-none"
+              style={{ backgroundColor: 'var(--text)', color: 'var(--bg)', boxShadow: '0 2px 12px rgba(0,0,0,0.15)' }}
             >
               Click anywhere to place a comment
             </div>
@@ -253,7 +299,6 @@ export default function ReviewClient({ session }: { session: Session }) {
           )}
         </div>
 
-        {/* Sidebar */}
         {sidebarOpen && (
           <CommentSidebar
             comments={comments}

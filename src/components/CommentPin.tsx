@@ -6,21 +6,22 @@ import type { Comment } from '@/lib/types'
 interface Props {
   comment: Comment
   index: number
+  screenXPct: number
+  screenYPct: number
   isActive: boolean
   onClick: () => void
   onResolve: (id: string, resolved: boolean) => void
   onDelete: (id: string) => void
 }
 
-export default function CommentPin({ comment, index, isActive, onClick, onResolve, onDelete }: Props) {
+export default function CommentPin({ comment, index, screenXPct, screenYPct, isActive, onClick, onResolve, onDelete }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   return (
     <div
       className="absolute z-20"
-      style={{ left: `${comment.x_percent}%`, top: `${comment.y_percent}%`, pointerEvents: 'auto' }}
+      style={{ left: `${screenXPct}%`, top: `${screenYPct}%`, pointerEvents: 'auto' }}
     >
-      {/* Pin */}
       <button
         onClick={e => { e.stopPropagation(); onClick() }}
         className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold -translate-x-1/2 -translate-y-1/2 transition-transform hover:scale-110 cursor-pointer"
@@ -35,7 +36,6 @@ export default function CommentPin({ comment, index, isActive, onClick, onResolv
         {index}
       </button>
 
-      {/* Popover */}
       {isActive && (
         <div
           className="absolute left-8 top-0 w-64 rounded-lg p-3 z-30"
