@@ -6,18 +6,19 @@ export const revalidate = 0
 export default async function ProjectsPage() {
   const supabase = createServiceClient()
 
-  const { data: sessions } = await supabase
-    .from('sessions')
-    .select('*, comments(count)')
-    .order('created_at', { ascending: false })
+  const [{ data: sessions }, { data: allComments }] = await Promise.all([
+    supabase.from('sessions').select('id, name, url, created_at').order('created_at', { ascending: false }),
+    supabase.from('comments').select('session_id'),
+  ])
 
-  const rows = (sessions ?? []) as Array<{
-    id: string
-    name: string
-    url: string
-    created_at: string
-    comments: { count: number }[]
-  }>
+  const rows = sessions ?? []
+  const comments = allComments ?? []
+
+  // Count comments per session
+  const countMap: Record<string, number> = {}
+  for (const c of comments) {
+    countMap[c.session_id] = (countMap[c.session_id] ?? 0) + 1
+  }
 
   return (
     <div className="min-h-screen px-6 py-12" style={{ backgroundColor: 'var(--bg)' }}>
@@ -61,7 +62,7 @@ export default async function ProjectsPage() {
         ) : (
           <div className="flex flex-col gap-2">
             {rows.map(session => {
-              const commentCount = session.comments?.[0]?.count ?? 0
+              const commentCount = countMap[session.id] ?? 0
               let hostname = ''
               try { hostname = new URL(session.url).hostname } catch {}
 
@@ -69,10 +70,8 @@ export default async function ProjectsPage() {
                 <Link
                   key={session.id}
                   href={`/review/${session.id}`}
-                  className="flex items-center justify-between px-4 py-3.5 rounded-xl transition-colors group"
+                  className="flex items-center justify-between px-4 py-3.5 rounded-xl transition-colors"
                   style={{ border: '1px solid var(--border)', backgroundColor: 'var(--bg)' }}
-                  onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'var(--bg-secondary)')}
-                  onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'var(--bg)')}
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div
