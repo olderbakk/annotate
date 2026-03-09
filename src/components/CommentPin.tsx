@@ -7,7 +7,7 @@ interface Props {
   comment: Comment
   index: number
   xPct: number   // % of page width
-  yPx: number    // absolute px from page top (inside scroll container)
+  yPx: number    // absolute px from page top inside the canvas container
   isActive: boolean
   onClick: () => void
   onResolve: (id: string, resolved: boolean) => void

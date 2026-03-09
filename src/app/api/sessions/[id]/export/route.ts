@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 
-function describePosition(xPct: number, yPct: number): string {
-  const xLabel = xPct < 33 ? 'left' : xPct < 66 ? 'center' : 'right'
-  const yLabel = yPct < 25 ? 'top' : yPct < 50 ? 'upper half' : yPct < 75 ? 'lower half' : 'bottom'
-  return `${yLabel}, ${xLabel}`
+function describeX(xPct: number): string {
+  return xPct < 33 ? 'left side' : xPct < 66 ? 'center' : 'right side'
 }
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -24,9 +22,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const lines: string[] = [
     `# Feedback: ${session.name}`,
-    `**URL:** ${session.url}`,
+    `**Site:** ${session.url}`,
     `**Exported:** ${new Date().toLocaleDateString('en', { year: 'numeric', month: 'long', day: 'numeric' })}`,
-    `**Open comments:** ${open.length}  |  **Resolved:** ${resolved.length}`,
+    `**Open:** ${open.length}  |  **Resolved:** ${resolved.length}`,
     '',
     '---',
     '',
@@ -34,42 +32,40 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     '',
   ]
 
+  function formatComment(c: Record<string, unknown>, i: number, strike = false) {
+    const author = strike ? `~~${c.author}~~` : String(c.author)
+    const pageUrl = c.page_url
+      ? String(c.page_url)
+      : (() => { try { return new URL(String(c.page_path), session.url).href } catch { return String(c.page_path) } })()
+    const yPx = c.y_abs_px != null ? `${Math.round(Number(c.y_abs_px))}px from top` : `${Number(c.y_percent ?? 0).toFixed(1)}% from top`
+    const xDesc = describeX(Number(c.x_percent))
+    const date = new Date(String(c.created_at)).toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })
+
+    lines.push(
+      `### ${i + 1}. ${author}`,
+      `**Page:** ${pageUrl}`,
+      `**Position:** ${xDesc}, ${yPx}`,
+      `**Date:** ${date}`,
+      '',
+      String(c.text),
+      '',
+      '---',
+      '',
+    )
+  }
+
   if (open.length === 0) {
     lines.push('_No open comments._', '')
   } else {
-    open.forEach((c, i) => {
-      lines.push(
-        `### ${i + 1}. ${c.author}`,
-        `**Location:** ${describePosition(c.x_percent, c.y_percent)} (x: ${c.x_percent.toFixed(1)}%, y: ${c.y_percent.toFixed(1)}% from top of page)`,
-        `**Page:** ${(() => { try { return new URL(c.page_path, session.url).href } catch { return c.page_path } })()}`,
-        `**Date:** ${new Date(c.created_at).toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}`,
-        '',
-        c.text,
-        '',
-        '---',
-        '',
-      )
-    })
+    open.forEach((c, i) => formatComment(c, i))
   }
 
   if (resolved.length > 0) {
-    lines.push('## Resolved comments', '')
-    resolved.forEach((c, i) => {
-      lines.push(
-        `### ${i + 1}. ~~${c.author}~~`,
-        `**Location:** ${describePosition(c.x_percent, c.y_percent)}`,
-        '',
-        c.text,
-        '',
-        '---',
-        '',
-      )
-    })
+    lines.push('## Resolved', '')
+    resolved.forEach((c, i) => formatComment(c, i, true))
   }
 
-  const markdown = lines.join('\n')
-
-  return new Response(markdown, {
+  return new Response(lines.join('\n'), {
     headers: {
       'Content-Type': 'text/markdown; charset=utf-8',
       'Content-Disposition': `attachment; filename="feedback-${session.name.toLowerCase().replace(/\s+/g, '-')}.md"`,

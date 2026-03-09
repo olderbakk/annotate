@@ -19,16 +19,27 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { session_id, page_path, x_percent, y_percent, text, author } = body
+  const { session_id, page_path, page_url, x_percent, y_abs_px, y_percent, page_height_px, viewport_width_px, text, author } = body
 
-  if (!session_id || x_percent == null || y_percent == null || !text) {
+  if (!session_id || x_percent == null || y_abs_px == null || !text) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
   }
 
   const supabase = createServiceClient()
   const { data, error } = await supabase
     .from('comments')
-    .insert({ session_id, page_path: page_path || '/', x_percent, y_percent, text, author: author || 'Anonymous' })
+    .insert({
+      session_id,
+      page_path: page_path || '/',
+      page_url: page_url || null,
+      x_percent,
+      y_abs_px,
+      y_percent: y_percent ?? 0,
+      page_height_px: page_height_px ?? 0,
+      viewport_width_px: viewport_width_px ?? 0,
+      text,
+      author: author || 'Anonymous',
+    })
     .select()
     .single()
 

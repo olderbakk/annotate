@@ -7,31 +7,46 @@ import CommentSidebar from '@/components/CommentSidebar'
 import CommentInput from '@/components/CommentInput'
 
 interface PendingPin {
-  xPct: number
-  yAbsPx: number     // absolute px from page top (for storage)
-  screenYPx: number  // px from viewport top (for placing the input bubble)
+  xPct: number       // % of overlay width
+  yAbsPx: number     // absolute px from page top — the Miro coordinate
+  screenYPx: number  // px from viewport top (for positioning the input bubble)
 }
 
-interface IframeState {
+interface IframeMsg {
   scrollY: number
   pageHeight: number
   realUrl: string
+  event?: string
+}
+
+// When jumping to a comment on a different page, we queue the jump here
+// and execute it once the new page's injected script reports back
+interface PendingJump {
+  comment: Comment
+  pageUrl: string
 }
 
 type Mode = 'browse' | 'comment'
+
+const CANVAS_HEIGHT = 99999 // tall enough for any page; clipped by parent overflow:hidden
 
 export default function ReviewClient({ session }: { session: Session }) {
   const [comments, setComments] = useState<Comment[]>([])
   const [pendingPin, setPendingPin] = useState<PendingPin | null>(null)
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null)
   const [iframeLoaded, setIframeLoaded] = useState(false)
-  const [currentPath, setCurrentPath] = useState('/')
+  const [currentUrl, setCurrentUrl] = useState(session.url)
+  const [scrollY, setScrollY] = useState(0)
+  const [pageHeight, setPageHeight] = useState(0)
   const [copied, setCopied] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [mode, setMode] = useState<Mode>('browse')
-  const [iframeState, setIframeState] = useState<IframeState>({ scrollY: 0, pageHeight: 0, realUrl: session.url })
+
   const overlayRef = useRef<HTMLDivElement>(null)
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  const pendingJumpRef = useRef<PendingJump | null>(null)
+  // Track the last URL we sent a scrollTo for (to avoid duplicate scrolls)
+  const lastJumpedUrlRef = useRef<string | null>(null)
 
   const fetchComments = useCallback(async () => {
     const res = await fetch(`/api/comments?session_id=${session.id}`)
@@ -43,16 +58,35 @@ export default function ReviewClient({ session }: { session: Session }) {
 
   useEffect(() => {
     function onMessage(e: MessageEvent) {
-      if (!e.data?.__annotate) return
-      const { scrollY, pageHeight, realUrl } = e.data
-      setIframeState({ scrollY: scrollY ?? 0, pageHeight: pageHeight ?? 0, realUrl: realUrl ?? session.url })
-      if (realUrl) {
-        try { setCurrentPath(new URL(realUrl).pathname) } catch {}
+      const d = e.data as IframeMsg & { __annotate?: boolean }
+      if (!d?.__annotate) return
+
+      setScrollY(d.scrollY ?? 0)
+      setPageHeight(d.pageHeight ?? 0)
+
+      if (d.realUrl) setCurrentUrl(d.realUrl)
+
+      // If there's a pending jump and this message is the load event for the target page
+      if (pendingJumpRef.current && d.event === 'load') {
+        const jump = pendingJumpRef.current
+        if (lastJumpedUrlRef.current !== jump.pageUrl) {
+          lastJumpedUrlRef.current = jump.pageUrl
+          const scrollTarget = Math.max(0, jump.comment.y_abs_px - 150)
+          // Small delay to let the page settle its height
+          setTimeout(() => {
+            iframeRef.current?.contentWindow?.postMessage(
+              { __annotateCommand: 'scrollTo', y: scrollTarget },
+              '*'
+            )
+            setActiveCommentId(jump.comment.id)
+          }, 300)
+          pendingJumpRef.current = null
+        }
       }
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [session.url])
+  }, [])
 
   useEffect(() => {
     if (mode === 'browse') setPendingPin(null)
@@ -65,7 +99,9 @@ export default function ReviewClient({ session }: { session: Session }) {
     const rect = overlayRef.current!.getBoundingClientRect()
     const xPct = ((e.clientX - rect.left) / rect.width) * 100
     const screenYPx = e.clientY - rect.top
-    const yAbsPx = screenYPx + iframeState.scrollY
+
+    // The Miro coordinate: absolute px from page top, regardless of scroll
+    const yAbsPx = screenYPx + scrollY
 
     setPendingPin({ xPct, yAbsPx, screenYPx })
     setActiveCommentId(null)
@@ -73,18 +109,21 @@ export default function ReviewClient({ session }: { session: Session }) {
 
   async function handleSaveComment(text: string, author: string) {
     if (!pendingPin) return
-    const pageH = iframeState.pageHeight || overlayRef.current?.clientHeight || 1
-    // Store y as % of total page height so it's position-independent
-    const yPct = (pendingPin.yAbsPx / pageH) * 100
 
     const res = await fetch('/api/comments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: session.id,
-        page_path: currentPath,
+        page_path: new URL(currentUrl).pathname,
+        page_url: currentUrl,
         x_percent: pendingPin.xPct,
-        y_percent: yPct,
+        y_abs_px: pendingPin.yAbsPx,          // absolute px — source of truth
+        y_percent: pageHeight > 0              // legacy, for export readability
+          ? (pendingPin.yAbsPx / pageHeight) * 100
+          : 0,
+        page_height_px: pageHeight,
+        viewport_width_px: overlayRef.current?.clientWidth ?? 0,
         text,
         author,
       }),
@@ -110,26 +149,30 @@ export default function ReviewClient({ session }: { session: Session }) {
     if (activeCommentId === id) setActiveCommentId(null)
   }
 
-  // Jump to a comment: scroll iframe to pin location (and navigate if different page)
   function handleJumpToComment(comment: Comment) {
-    setActiveCommentId(comment.id)
+    const targetUrl = comment.page_url || new URL(comment.page_path, session.url).href
+    const targetPath = new URL(targetUrl).pathname
+    const currentPath = new URL(currentUrl).pathname
 
-    // Navigate to correct page if needed
-    if (comment.page_path !== currentPath) {
-      const targetUrl = new URL(comment.page_path, session.url).href
+    if (targetPath !== currentPath) {
+      // Different page — queue the jump, navigate iframe
+      pendingJumpRef.current = { comment, pageUrl: targetUrl }
+      lastJumpedUrlRef.current = null
       if (iframeRef.current) {
         iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(targetUrl)}`
         setIframeLoaded(false)
+        setScrollY(0)
+        setPageHeight(0)
       }
+    } else {
+      // Same page — scroll directly to pin position
+      const scrollTarget = Math.max(0, comment.y_abs_px - 150)
+      iframeRef.current?.contentWindow?.postMessage(
+        { __annotateCommand: 'scrollTo', y: scrollTarget },
+        '*'
+      )
+      setActiveCommentId(comment.id)
     }
-
-    // Scroll iframe to the comment position
-    const pageH = iframeState.pageHeight || 1
-    const yAbsPx = (comment.y_percent / 100) * pageH
-    iframeRef.current?.contentWindow?.postMessage(
-      { __annotateCommand: 'scrollTo', y: Math.max(0, yAbsPx - 120) },
-      '*'
-    )
   }
 
   function copyShareLink() {
@@ -138,13 +181,13 @@ export default function ReviewClient({ session }: { session: Session }) {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const pageComments = comments.filter(c => c.page_path === currentPath)
+  const currentPath = new URL(currentUrl).pathname
+  const pageComments = comments.filter(c => {
+    const cPath = c.page_url ? new URL(c.page_url).pathname : c.page_path
+    return cPath === currentPath
+  })
   const unresolvedCount = comments.filter(c => !c.resolved).length
   const proxyUrl = `/api/proxy?url=${encodeURIComponent(session.url)}`
-
-  // Pin container: positioned absolutely, height = pageHeight, translated by -scrollY
-  // This makes pins CSS-locked to their page position without React re-render per scroll
-  const pageH = iframeState.pageHeight || (overlayRef.current?.clientHeight ?? 0)
 
   return (
     <div className="flex flex-col h-screen overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
@@ -160,7 +203,7 @@ export default function ReviewClient({ session }: { session: Session }) {
           <div className="w-px h-3" style={{ backgroundColor: 'var(--border)' }} />
           <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{session.name}</span>
           <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            {new URL(session.url).hostname}
+            {new URL(session.url).hostname}{currentPath !== '/' ? currentPath : ''}
           </span>
         </div>
 
@@ -248,39 +291,39 @@ export default function ReviewClient({ session }: { session: Session }) {
               }}
               onClick={handleOverlayClick}
             >
-              {/* Scroll-locked pin container: CSS transform mirrors iframe scroll */}
-              {pageH > 0 && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: `${pageH}px`,
-                    transform: `translateY(${-iframeState.scrollY}px)`,
-                    pointerEvents: 'none',
-                  }}
-                >
-                  {pageComments.map((comment, i) => {
-                    const yAbsPx = (comment.y_percent / 100) * pageH
-                    return (
-                      <CommentPin
-                        key={comment.id}
-                        comment={comment}
-                        index={i + 1}
-                        xPct={comment.x_percent}
-                        yPx={yAbsPx}
-                        isActive={activeCommentId === comment.id}
-                        onClick={() => setActiveCommentId(activeCommentId === comment.id ? null : comment.id)}
-                        onResolve={handleResolve}
-                        onDelete={handleDelete}
-                      />
-                    )
-                  })}
-                </div>
-              )}
+              {/*
+                Miro-board canvas: a tall fixed div that translates by -scrollY.
+                Pins sit at their absolute y_abs_px coordinate, always.
+                No page height math — just pure coordinate positioning.
+              */}
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: `${CANVAS_HEIGHT}px`,
+                  transform: `translateY(${-scrollY}px)`,
+                  pointerEvents: 'none',
+                  willChange: 'transform',
+                }}
+              >
+                {pageComments.map((comment, i) => (
+                  <CommentPin
+                    key={comment.id}
+                    comment={comment}
+                    index={i + 1}
+                    xPct={comment.x_percent}
+                    yPx={comment.y_abs_px}
+                    isActive={activeCommentId === comment.id}
+                    onClick={() => setActiveCommentId(activeCommentId === comment.id ? null : comment.id)}
+                    onResolve={handleResolve}
+                    onDelete={handleDelete}
+                  />
+                ))}
+              </div>
 
-              {/* Pending pin — at viewport position, outside scroll container */}
+              {/* Pending pin — at viewport position, outside the scroll canvas */}
               {pendingPin && (
                 <div
                   className="absolute z-30"
