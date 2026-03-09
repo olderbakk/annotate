@@ -18,7 +18,7 @@ export default function CommentPin({ comment, index, isActive, onClick, onResolv
   return (
     <div
       className="absolute z-20"
-      style={{ left: `${comment.x_percent}%`, top: `${comment.y_percent}%` }}
+      style={{ left: `${comment.x_percent}%`, top: `${comment.y_percent}%`, pointerEvents: 'auto' }}
     >
       {/* Pin */}
       <button

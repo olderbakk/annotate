@@ -7,11 +7,11 @@ import CommentSidebar from '@/components/CommentSidebar'
 import CommentInput from '@/components/CommentInput'
 
 interface PendingPin {
-  x: number
-  y: number
   xPct: number
   yPct: number
 }
+
+type Mode = 'browse' | 'comment'
 
 export default function ReviewClient({ session }: { session: Session }) {
   const [comments, setComments] = useState<Comment[]>([])
@@ -21,8 +21,8 @@ export default function ReviewClient({ session }: { session: Session }) {
   const [currentPath, setCurrentPath] = useState('/')
   const [copied, setCopied] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [mode, setMode] = useState<Mode>('browse')
   const overlayRef = useRef<HTMLDivElement>(null)
-  const iframeRef = useRef<HTMLIFrameElement>(null)
 
   const fetchComments = useCallback(async () => {
     const res = await fetch(`/api/comments?session_id=${session.id}`)
@@ -34,17 +34,21 @@ export default function ReviewClient({ session }: { session: Session }) {
     fetchComments()
   }, [fetchComments])
 
+  // Cancel pending pin when switching to browse mode
+  useEffect(() => {
+    if (mode === 'browse') setPendingPin(null)
+  }, [mode])
+
   function handleOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (mode !== 'comment') return
     if (pendingPin) {
       setPendingPin(null)
       return
     }
-    const rect = (e.target as HTMLElement).getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
-    const xPct = (x / rect.width) * 100
-    const yPct = (y / rect.height) * 100
-    setPendingPin({ x, y, xPct, yPct })
+    const rect = overlayRef.current!.getBoundingClientRect()
+    const xPct = ((e.clientX - rect.left) / rect.width) * 100
+    const yPct = ((e.clientY - rect.top) / rect.height) * 100
+    setPendingPin({ xPct, yPct })
     setActiveCommentId(null)
   }
 
@@ -112,6 +116,35 @@ export default function ReviewClient({ session }: { session: Session }) {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Mode toggle */}
+          <div
+            className="flex items-center rounded-md p-0.5 gap-0.5"
+            style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+          >
+            <button
+              onClick={() => setMode('browse')}
+              className="text-xs px-2.5 py-1 rounded transition-all cursor-pointer"
+              style={{
+                backgroundColor: mode === 'browse' ? 'var(--bg)' : 'transparent',
+                color: mode === 'browse' ? 'var(--text)' : 'var(--text-muted)',
+                boxShadow: mode === 'browse' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+              }}
+            >
+              Browse
+            </button>
+            <button
+              onClick={() => setMode('comment')}
+              className="text-xs px-2.5 py-1 rounded transition-all cursor-pointer"
+              style={{
+                backgroundColor: mode === 'comment' ? 'var(--bg)' : 'transparent',
+                color: mode === 'comment' ? 'var(--accent)' : 'var(--text-muted)',
+                boxShadow: mode === 'comment' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+              }}
+            >
+              Comment
+            </button>
+          </div>
+
           {unresolvedCount > 0 && (
             <span
               className="text-xs px-1.5 py-0.5 rounded-full"
@@ -144,36 +177,28 @@ export default function ReviewClient({ session }: { session: Session }) {
       <div className="flex flex-1 overflow-hidden">
         {/* Iframe area */}
         <div className="flex-1 relative overflow-hidden">
-          {/* Instruction bar */}
-          <div
-            className="absolute top-0 left-0 right-0 z-10 flex items-center justify-center h-8"
-            style={{ backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}
-          >
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              Click anywhere on the page to add a comment
-            </p>
-          </div>
-
-          {/* Iframe */}
+          {/* Iframe — always full size, scrollable in browse mode */}
           <iframe
-            ref={iframeRef}
             src={session.url}
-            className="w-full h-full"
-            style={{ paddingTop: '2rem' }}
+            className="w-full h-full border-0"
             onLoad={() => setIframeLoaded(true)}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-navigation"
             title="Review target"
+            style={{ pointerEvents: mode === 'browse' ? 'auto' : 'none' }}
           />
 
-          {/* Click overlay */}
+          {/* Overlay — only active in comment mode */}
           {iframeLoaded && (
             <div
               ref={overlayRef}
-              className="absolute inset-0 cursor-crosshair"
-              style={{ top: '2rem' }}
+              className="absolute inset-0"
+              style={{
+                cursor: mode === 'comment' ? 'crosshair' : 'default',
+                pointerEvents: mode === 'comment' ? 'auto' : 'none',
+              }}
               onClick={handleOverlayClick}
             >
-              {/* Placed comment pins */}
+              {/* Placed pins — always visible */}
               {pageComments.map((comment, i) => (
                 <CommentPin
                   key={comment.id}
@@ -207,8 +232,22 @@ export default function ReviewClient({ session }: { session: Session }) {
             </div>
           )}
 
+          {/* Comment mode hint bar */}
+          {mode === 'comment' && (
+            <div
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full text-xs z-20"
+              style={{
+                backgroundColor: 'var(--text)',
+                color: 'var(--bg)',
+                boxShadow: '0 2px 12px rgba(0,0,0,0.15)',
+              }}
+            >
+              Click anywhere to place a comment
+            </div>
+          )}
+
           {!iframeLoaded && (
-            <div className="absolute inset-0 flex items-center justify-center" style={{ paddingTop: '2rem' }}>
+            <div className="absolute inset-0 flex items-center justify-center" style={{ backgroundColor: 'var(--bg)' }}>
               <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading…</p>
             </div>
           )}
