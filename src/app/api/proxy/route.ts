@@ -65,12 +65,28 @@ export async function GET(req: NextRequest) {
   var _pushState = history.pushState.bind(history);
   var _replaceState = history.replaceState.bind(history);
 
+  // When the proxied site calls pushState/replaceState with an absolute URL to
+  // its own domain (e.g. "https://example.com/about"), the browser throws a
+  // SecurityError because the document origin is annotate-two.vercel.app.
+  // Fix: strip absolute URLs down to just their path before passing to the
+  // real history API. REAL_URL still gets updated with the full URL.
+  function safeHistoryUrl(url) {
+    if (!url) return url;
+    try {
+      var parsed = new URL(String(url), REAL_URL);
+      if (parsed.origin !== location.origin) {
+        return parsed.pathname + parsed.search + parsed.hash;
+      }
+    } catch (e) {}
+    return url;
+  }
+
   history.pushState = function (state, title, url) {
-    _pushState(state, title, url);
+    try { _pushState(state, title, safeHistoryUrl(url)); } catch (e) {}
     if (url) onSpaNavigate(String(url));
   };
   history.replaceState = function (state, title, url) {
-    _replaceState(state, title, url);
+    try { _replaceState(state, title, safeHistoryUrl(url)); } catch (e) {}
     if (url) onSpaNavigate(String(url));
   };
 
