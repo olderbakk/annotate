@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 
 export default function Home() {
   const router = useRouter()
@@ -38,14 +39,19 @@ export default function Home() {
     <div className="min-h-screen flex flex-col items-center justify-center px-6" style={{ backgroundColor: 'var(--bg)' }}>
       <div className="w-full max-w-sm">
         {/* Logo */}
-        <div className="mb-10 flex items-center gap-2">
-          <div
-            className="w-5 h-5 rounded-full"
-            style={{ backgroundColor: 'var(--accent)' }}
-          />
-          <span className="text-sm font-medium tracking-wide" style={{ color: 'var(--text)' }}>
-            annotate
-          </span>
+        <div className="mb-10 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div
+              className="w-5 h-5 rounded-full"
+              style={{ backgroundColor: 'var(--accent)' }}
+            />
+            <span className="text-sm font-medium tracking-wide" style={{ color: 'var(--text)' }}>
+              annotate
+            </span>
+          </div>
+          <Link href="/projects" className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            All projects
+          </Link>
         </div>
 
         <h1 className="text-2xl font-semibold mb-1 tracking-tight" style={{ color: 'var(--text)' }}>
