@@ -60,7 +60,7 @@ export default function CommentSidebar({
                     comment={c}
                     index={comments.indexOf(c) + 1}
                     isActive={activeCommentId === c.id}
-                    isCurrentPage={c.page_path === currentPath}
+                    isCurrentPage={c.page_path.replace(/\/$/, '') === currentPath}
                     onClick={() => onSelectComment(activeCommentId === c.id ? null : c.id)}
                     onResolve={onResolve}
                     onDelete={onDelete}
@@ -83,7 +83,7 @@ export default function CommentSidebar({
                     comment={c}
                     index={comments.indexOf(c) + 1}
                     isActive={activeCommentId === c.id}
-                    isCurrentPage={c.page_path === currentPath}
+                    isCurrentPage={c.page_path.replace(/\/$/, '') === currentPath}
                     onClick={() => onSelectComment(activeCommentId === c.id ? null : c.id)}
                     onResolve={onResolve}
                     onDelete={onDelete}

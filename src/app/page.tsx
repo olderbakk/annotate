@@ -2,7 +2,6 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 
 export default function Home() {
   const router = useRouter()
@@ -46,12 +45,9 @@ export default function Home() {
               style={{ backgroundColor: 'var(--accent)' }}
             />
             <span className="text-sm font-medium tracking-wide" style={{ color: 'var(--text)' }}>
-              annotate
+              Travers → feedback
             </span>
           </div>
-          <Link href="/projects" className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            All projects
-          </Link>
         </div>
 
         <h1 className="text-2xl font-semibold mb-1 tracking-tight" style={{ color: 'var(--text)' }}>

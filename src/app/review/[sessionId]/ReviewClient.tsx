@@ -17,6 +17,7 @@ interface IframeMsg {
   pageHeight: number
   realUrl: string
   event?: string
+  __navigateTo?: string  // proxy URL to load — sent by <a> click interceptor
 }
 
 // When jumping to a comment on a different page, we queue the jump here
@@ -35,6 +36,7 @@ export default function ReviewClient({ session }: { session: Session }) {
   const [pendingPin, setPendingPin] = useState<PendingPin | null>(null)
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null)
   const [iframeLoaded, setIframeLoaded] = useState(false)
+  const [iframeSrc, setIframeSrc] = useState(`/api/proxy?url=${encodeURIComponent(session.url)}`)
   const [currentUrl, setCurrentUrl] = useState(session.url)
   const [scrollY, setScrollY] = useState(0)
   const [pageHeight, setPageHeight] = useState(0)
@@ -65,6 +67,15 @@ export default function ReviewClient({ session }: { session: Session }) {
       setPageHeight(d.pageHeight ?? 0)
 
       if (d.realUrl) setCurrentUrl(d.realUrl)
+
+      // <a> click in iframe — navigate via React state so src and currentUrl stay in sync
+      if (d.__navigateTo) {
+        setIframeSrc(d.__navigateTo)
+        setIframeLoaded(false)
+        setScrollY(0)
+        setPageHeight(0)
+        return
+      }
 
       // If there's a pending jump and the new page has loaded (load or navigate event)
       if (pendingJumpRef.current && (d.event === 'load' || d.event === 'navigate')) {
@@ -158,12 +169,11 @@ export default function ReviewClient({ session }: { session: Session }) {
       // Different page — queue the jump, navigate iframe
       pendingJumpRef.current = { comment, pageUrl: targetUrl }
       lastJumpedUrlRef.current = null
-      if (iframeRef.current) {
-        iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(targetUrl)}`
-        setIframeLoaded(false)
-        setScrollY(0)
-        setPageHeight(0)
-      }
+      setIframeSrc(`/api/proxy?url=${encodeURIComponent(targetUrl)}`)
+      setCurrentUrl(targetUrl)
+      setIframeLoaded(false)
+      setScrollY(0)
+      setPageHeight(0)
     } else {
       // Same page — scroll directly to pin position
       const scrollTarget = Math.max(0, comment.y_abs_px - 150)
@@ -181,13 +191,14 @@ export default function ReviewClient({ session }: { session: Session }) {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const currentPath = new URL(currentUrl).pathname
+  // Normalize paths: remove trailing slash except for root '/'
+  function normPath(p: string) { return p.length > 1 ? p.replace(/\/$/, '') : p }
+  const currentPath = normPath(new URL(currentUrl).pathname)
   const pageComments = comments.filter(c => {
-    const cPath = c.page_url ? new URL(c.page_url).pathname : c.page_path
-    return cPath === currentPath
+    const raw = c.page_url ? new URL(c.page_url).pathname : c.page_path
+    return normPath(raw) === currentPath
   })
   const unresolvedCount = comments.filter(c => !c.resolved).length
-  const proxyUrl = `/api/proxy?url=${encodeURIComponent(session.url)}`
 
   return (
     <div className="flex flex-col h-screen overflow-hidden" style={{ backgroundColor: 'var(--bg)' }}>
@@ -274,9 +285,21 @@ export default function ReviewClient({ session }: { session: Session }) {
         <div className="flex-1 relative overflow-hidden">
           <iframe
             ref={iframeRef}
-            src={proxyUrl}
+            src={iframeSrc}
             className="w-full h-full border-0"
-            onLoad={() => setIframeLoaded(true)}
+            onLoad={() => {
+              setIframeLoaded(true)
+              // Extract the real target URL from the proxy URL so currentUrl
+              // stays correct even if postMessages are delayed or lost.
+              try {
+                const loc = iframeRef.current?.contentWindow?.location?.href
+                if (loc) {
+                  const u = new URL(loc)
+                  const targetUrl = u.searchParams.get('url')
+                  if (targetUrl) setCurrentUrl(targetUrl)
+                }
+              } catch (_) {}
+            }}
             title="Review target"
             style={{ pointerEvents: mode === 'browse' ? 'auto' : 'none' }}
           />
